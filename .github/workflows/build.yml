@@ -40,11 +40,25 @@ jobs:
 
       - name: Download Gentoo Stage3
         run: |
-          # Fetch the latest Gentoo Stage3 tarball for ARMv7a hardfp (now explicitly tracking OpenRC)
-          BASE_URL="https://distfiles.gentoo.org/releases/arm/autobuilds/"
-          # Fixed the .txt filename to the new Gentoo OpenRC naming scheme
-          LATEST_PATH=$(curl -sSL "${BASE_URL}latest-stage3-armv7a_hardfp-openrc.txt" | grep -v "^#" | awk '{print $1}')
-          curl -sSL -o stage3.tar.xz "${BASE_URL}${LATEST_PATH}"
+          # The specific folder for ARMv7a hardfp OpenRC
+          BASE_URL="https://distfiles.gentoo.org/releases/arm/autobuilds/current-stage3-armv7a_hardfp-openrc/"
+          
+          echo "Fetching directory index from $BASE_URL"
+          
+          # Parse the HTML output directly to find the href containing the .tar.xz archive
+          TARBALL=$(curl -sSL "$BASE_URL" | grep -oE 'href="stage3-armv7a_hardfp-openrc-[0-9TZ]+\.tar\.xz"' | cut -d'"' -f2 | head -n 1)
+          
+          # Failsafe check
+          if [ -z "$TARBALL" ]; then
+            echo "Error: Could not find the stage3 tarball in $BASE_URL."
+            exit 1
+          fi
+          
+          echo "Found tarball: $TARBALL"
+          echo "Downloading from: ${BASE_URL}${TARBALL}"
+          
+          # Download the actual stage3 archive
+          curl -sSL -o stage3.tar.xz "${BASE_URL}${TARBALL}"
 
       - name: Create and populate Image
         run: |
