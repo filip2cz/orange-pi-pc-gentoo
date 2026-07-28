@@ -15,7 +15,6 @@ jobs:
         run: |
           # Install cross-compilation toolchain and utilities required for building
           sudo apt-get update
-          # Added libgnutls28-dev, uuid-dev and pkg-config to fix U-Boot mkeficapsule compilation error
           sudo apt-get install -y gcc-arm-linux-gnueabihf bison flex libssl-dev bc u-boot-tools parted dosfstools e2fsprogs fdisk swig python3-dev python3-setuptools xz-utils libgnutls28-dev uuid-dev pkg-config
 
       - name: Build U-Boot
@@ -41,9 +40,10 @@ jobs:
 
       - name: Download Gentoo Stage3
         run: |
-          # Fetch the latest Gentoo Stage3 tarball for ARMv7a hardfp
+          # Fetch the latest Gentoo Stage3 tarball for ARMv7a hardfp (now explicitly tracking OpenRC)
           BASE_URL="https://distfiles.gentoo.org/releases/arm/autobuilds/"
-          LATEST_PATH=$(curl -sSL "${BASE_URL}latest-stage3-armv7a_hardfp.txt" | grep -v "^#" | awk '{print $1}')
+          # Fixed the .txt filename to the new Gentoo OpenRC naming scheme
+          LATEST_PATH=$(curl -sSL "${BASE_URL}latest-stage3-armv7a_hardfp-openrc.txt" | grep -v "^#" | awk '{print $1}')
           curl -sSL -o stage3.tar.xz "${BASE_URL}${LATEST_PATH}"
 
       - name: Create and populate Image
