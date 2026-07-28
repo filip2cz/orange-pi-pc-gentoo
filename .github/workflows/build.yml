@@ -1,11 +1,11 @@
 name: Build Gentoo for Orange Pi PC
 
 on:
-  push: # Triggers the workflow on every push to the repository
+  push:
     branches:
       - main
-      - master # Triggers on both main and master to cover common default branch names
-  workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
+      - master
+  workflow_dispatch:
 
 jobs:
   build:
@@ -15,7 +15,8 @@ jobs:
         run: |
           # Install cross-compilation toolchain and utilities required for building
           sudo apt-get update
-          sudo apt-get install -y gcc-arm-linux-gnueabihf bison flex libssl-dev bc u-boot-tools parted dosfstools e2fsprogs fdisk swig python3-dev python3-setuptools xz-utils
+          # Added libgnutls28-dev, uuid-dev and pkg-config to fix U-Boot mkeficapsule compilation error
+          sudo apt-get install -y gcc-arm-linux-gnueabihf bison flex libssl-dev bc u-boot-tools parted dosfstools e2fsprogs fdisk swig python3-dev python3-setuptools xz-utils libgnutls28-dev uuid-dev pkg-config
 
       - name: Build U-Boot
         run: |
@@ -74,7 +75,6 @@ jobs:
           sudo make -C linux ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- INSTALL_MOD_PATH=$PWD/mnt modules_install
           
           # Configure extlinux bootloader menu
-          # Added console=ttyGS0,115200 to pass kernel logs to the USB Gadget Serial device
           cat <<EOF | sudo tee mnt/boot/extlinux/extlinux.conf
           # U-Boot extlinux configuration
           label Gentoo Linux
