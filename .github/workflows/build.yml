@@ -1,0 +1,119 @@
+name: Build Gentoo for Orange Pi PC
+
+on:
+  push: # Triggers the workflow on every push to the repository
+    branches:
+      - main
+      - master # Triggers on both main and master to cover common default branch names
+  workflow_dispatch: # Allows you to run this workflow manually from the Actions tab
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install dependencies
+        run: |
+          # Install cross-compilation toolchain and utilities required for building
+          sudo apt-get update
+          sudo apt-get install -y gcc-arm-linux-gnueabihf bison flex libssl-dev bc u-boot-tools parted dosfstools e2fsprogs fdisk swig python3-dev python3-setuptools xz-utils
+
+      - name: Build U-Boot
+        run: |
+          # Clone and build mainline U-Boot specific to Orange Pi PC
+          git clone --depth 1 https://source.denx.de/u-boot/u-boot.git
+          cd u-boot
+          make CROSS_COMPILE=arm-linux-gnueabihf- orangepi_pc_defconfig
+          make CROSS_COMPILE=arm-linux-gnueabihf- -j$(nproc)
+
+      - name: Build Linux Kernel
+        run: |
+          # Clone and build mainline Linux Kernel for ARM sunxi
+          git clone --depth 1 --branch v6.6 https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+          cd linux
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- sunxi_defconfig
+          
+          # Explicitly enable the USB Gadget Serial driver (g_serial) as a module
+          ./scripts/config -m CONFIG_USB_G_SERIAL
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- olddefconfig
+          
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- -j$(nproc) zImage dtbs modules
+
+      - name: Download Gentoo Stage3
+        run: |
+          # Fetch the latest Gentoo Stage3 tarball for ARMv7a hardfp
+          BASE_URL="https://distfiles.gentoo.org/releases/arm/autobuilds/"
+          LATEST_PATH=$(curl -sSL "${BASE_URL}latest-stage3-armv7a_hardfp.txt" | grep -v "^#" | awk '{print $1}')
+          curl -sSL -o stage3.tar.xz "${BASE_URL}${LATEST_PATH}"
+
+      - name: Create and populate Image
+        run: |
+          # Create a 2GB raw disk image filled with zeros
+          dd if=/dev/zero of=gentoo-orangepi-pc.img bs=1M count=2000
+          
+          # Create a single ext4 partition starting at 1MiB
+          parted -s gentoo-orangepi-pc.img mklabel msdos
+          parted -s gentoo-orangepi-pc.img mkpart primary ext4 1MiB 100%
+          
+          # Map the image to a loop device
+          LOOPDEV=$(sudo losetup -fP --show gentoo-orangepi-pc.img)
+          
+          # Format as ext4 without a journal to save SD card writes
+          sudo mkfs.ext4 -O ^has_journal ${LOOPDEV}p1
+          
+          # Mount the partition
+          mkdir -p mnt
+          sudo mount ${LOOPDEV}p1 mnt
+          
+          # Extract Gentoo stage3
+          sudo tar xpf stage3.tar.xz -C mnt/ --xattrs-include='*.*' --numeric-owner
+          
+          # Install Kernel, DTB, and Modules
+          sudo mkdir -p mnt/boot/extlinux
+          sudo cp linux/arch/arm/boot/zImage mnt/boot/
+          sudo cp linux/arch/arm/boot/dts/allwinner/sun8i-h3-orangepi-pc.dtb mnt/boot/
+          sudo make -C linux ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- INSTALL_MOD_PATH=$PWD/mnt modules_install
+          
+          # Configure extlinux bootloader menu
+          # Added console=ttyGS0,115200 to pass kernel logs to the USB Gadget Serial device
+          cat <<EOF | sudo tee mnt/boot/extlinux/extlinux.conf
+          # U-Boot extlinux configuration
+          label Gentoo Linux
+            kernel /boot/zImage
+            fdt /boot/sun8i-h3-orangepi-pc.dtb
+            append console=ttyS0,115200 console=ttyGS0,115200 root=/dev/mmcblk0p1 rootwait rw
+          EOF
+          
+          # Configure fstab
+          echo "/dev/mmcblk0p1 / ext4 defaults,noatime 0 1" | sudo tee mnt/etc/fstab
+          
+          # Remove the root password lock
+          sudo sed -i 's/^root:\*/root:/' mnt/etc/shadow
+          
+          # Load g_serial module automatically on boot
+          echo 'modules="g_serial"' | sudo tee -a mnt/etc/conf.d/modules
+          
+          # Allow root login on the USB serial console device
+          echo "ttyGS0" | sudo tee -a mnt/etc/securetty
+          
+          # Enable shell login in inittab for both hardware UART (ttyS0) and USB OTG (ttyGS0)
+          echo "s0:12345:respawn:/sbin/agetty -L 115200 ttyS0 vt100" | sudo tee -a mnt/etc/inittab
+          echo "gs0:12345:respawn:/sbin/agetty -L 115200 ttyGS0 vt100" | sudo tee -a mnt/etc/inittab
+          
+          # Sync and unmount
+          sync
+          sudo umount mnt
+          sudo losetup -d ${LOOPDEV}
+          
+          # Flash U-Boot to the raw image (seek=8 for Allwinner H3)
+          dd if=u-boot/u-boot-sunxi-with-spl.bin of=gentoo-orangepi-pc.img bs=1024 seek=8 conv=notrunc
+
+      - name: Compress Image
+        run: |
+          # Compress the final image
+          xz -T0 gentoo-orangepi-pc.img
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gentoo-orangepi-pc-image
+          path: gentoo-orangepi-pc.img.xz
