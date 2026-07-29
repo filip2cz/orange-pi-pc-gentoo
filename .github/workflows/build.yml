@@ -40,7 +40,7 @@ jobs:
 
       - name: Download Gentoo Stage3
         run: |
-          # The specific folder for ARMv7a hardfp OpenRC
+          # Go directly to the current release directory for ARMv7a hardfp with OpenRC
           BASE_URL="https://distfiles.gentoo.org/releases/arm/autobuilds/current-stage3-armv7a_hardfp-openrc/"
           
           echo "Fetching directory index from $BASE_URL"
@@ -89,12 +89,13 @@ jobs:
           sudo make -C linux ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- INSTALL_MOD_PATH=$PWD/mnt modules_install
           
           # Configure extlinux bootloader menu
+          # Added console=tty1 to keep the HDMI output active
           cat <<EOF | sudo tee mnt/boot/extlinux/extlinux.conf
           # U-Boot extlinux configuration
           label Gentoo Linux
             kernel /boot/zImage
             fdt /boot/sun8i-h3-orangepi-pc.dtb
-            append console=ttyS0,115200 console=ttyGS0,115200 root=/dev/mmcblk0p1 rootwait rw
+            append console=tty1 console=ttyS0,115200 console=ttyGS0,115200 root=/dev/mmcblk0p1 rootwait rw
           EOF
           
           # Configure fstab
@@ -103,7 +104,23 @@ jobs:
           # Remove the root password lock
           sudo sed -i 's/^root:\*/root:/' mnt/etc/shadow
           
-          # Load g_serial module automatically on boot
+          # --- NETWORK (DHCP) & SSH SETUP ---
+          # 1. Set eth0 to use DHCP
+          echo 'config_eth0="dhcp"' | sudo tee -a mnt/etc/conf.d/net
+          
+          # 2. Create the init script symlink for eth0
+          sudo ln -s net.lo mnt/etc/init.d/net.eth0
+          
+          # 3. Add networking and SSH to the default runlevel (runs on boot)
+          sudo ln -s ../../init.d/net.eth0 mnt/etc/runlevels/default/net.eth0
+          sudo ln -s ../../init.d/sshd mnt/etc/runlevels/default/sshd
+          
+          # 4. Allow root to login via SSH with an empty password
+          echo "PermitRootLogin yes" | sudo tee -a mnt/etc/ssh/sshd_config
+          echo "PermitEmptyPasswords yes" | sudo tee -a mnt/etc/ssh/sshd_config
+          # ----------------------------------
+          
+          # Load g_serial module automatically on boot for USB Gadget Console
           echo 'modules="g_serial"' | sudo tee -a mnt/etc/conf.d/modules
           
           # Allow root login on the USB serial console device
