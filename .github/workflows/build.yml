@@ -32,10 +32,24 @@ jobs:
           cd linux
           make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- sunxi_defconfig
           
-          # Explicitly enable the USB Gadget Serial driver (g_serial) as a module
-          ./scripts/config -m CONFIG_USB_G_SERIAL
-          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- olddefconfig
+          # MAGIC HAPPENS HERE: We force critical drivers to be built-in (=y) instead of modules (=m).
+          # This guarantees that HDMI, Network, and USB Gadget work IMMEDIATELY, 
+          # even before the SD card is mounted.
           
+          # 1. Keep U-Boot's basic display alive until real DRM loads
+          ./scripts/config -e CONFIG_FB_SIMPLE
+          # 2. Build Allwinner DRM (HDMI) directly into the kernel
+          ./scripts/config -e CONFIG_DRM_SUN4I
+          ./scripts/config -e CONFIG_DRM_SUN8I_MIXER
+          ./scripts/config -e CONFIG_DRM_SUN8I_DW_HDMI
+          # 3. Build Ethernet (EMAC) directly into the kernel
+          ./scripts/config -e CONFIG_SUN8I_EMAC
+          ./scripts/config -e CONFIG_MDIO_SUN4I
+          # 4. Build USB Gadget Serial directly into the kernel
+          ./scripts/config -e CONFIG_USB_MUSB_SUNXI
+          ./scripts/config -e CONFIG_USB_G_SERIAL
+          
+          make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- olddefconfig
           make ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- -j$(nproc) zImage dtbs modules
 
       - name: Download Gentoo Stage3
@@ -75,6 +89,11 @@ jobs:
           # Format as ext4 without a journal to save SD card writes
           sudo mkfs.ext4 -O ^has_journal ${LOOPDEV}p1
           
+          # Extract the exact UUID of the newly formatted partition
+          # This is much safer than relying on /dev/mmcblk0p1
+          ROOT_UUID=$(sudo blkid -s UUID -o value ${LOOPDEV}p1)
+          echo "Root partition UUID is: $ROOT_UUID"
+          
           # Mount the partition
           mkdir -p mnt
           sudo mount ${LOOPDEV}p1 mnt
@@ -89,17 +108,16 @@ jobs:
           sudo make -C linux ARCH=arm CROSS_COMPILE=arm-linux-gnueabihf- INSTALL_MOD_PATH=$PWD/mnt modules_install
           
           # Configure extlinux bootloader menu
-          # Added console=tty1 to keep the HDMI output active
           cat <<EOF | sudo tee mnt/boot/extlinux/extlinux.conf
           # U-Boot extlinux configuration
           label Gentoo Linux
             kernel /boot/zImage
             fdt /boot/sun8i-h3-orangepi-pc.dtb
-            append console=tty1 console=ttyS0,115200 console=ttyGS0,115200 root=/dev/mmcblk0p1 rootwait rw
+            append console=tty1 console=ttyS0,115200 console=ttyGS0,115200 root=UUID=${ROOT_UUID} rootwait rw earlycon=uart,mmio32,0x01c28000
           EOF
           
-          # Configure fstab
-          echo "/dev/mmcblk0p1 / ext4 defaults,noatime 0 1" | sudo tee mnt/etc/fstab
+          # Configure fstab using UUID
+          echo "UUID=${ROOT_UUID} / ext4 defaults,noatime 0 1" | sudo tee mnt/etc/fstab
           
           # Remove the root password lock
           sudo sed -i 's/^root:\*/root:/' mnt/etc/shadow
@@ -119,9 +137,6 @@ jobs:
           echo "PermitRootLogin yes" | sudo tee -a mnt/etc/ssh/sshd_config
           echo "PermitEmptyPasswords yes" | sudo tee -a mnt/etc/ssh/sshd_config
           # ----------------------------------
-          
-          # Load g_serial module automatically on boot for USB Gadget Console
-          echo 'modules="g_serial"' | sudo tee -a mnt/etc/conf.d/modules
           
           # Allow root login on the USB serial console device
           echo "ttyGS0" | sudo tee -a mnt/etc/securetty
@@ -144,7 +159,7 @@ jobs:
           xz -T0 gentoo-orangepi-pc.img
 
       - name: Upload Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gentoo-orangepi-pc-image
           path: gentoo-orangepi-pc.img.xz
